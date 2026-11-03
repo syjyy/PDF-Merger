@@ -1,0 +1,47 @@
+name: Windows build and test
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build, test and package C++ application
+        shell: pwsh
+        run: ./scripts/build.ps1
+      - name: Install setup compiler and build Windows installer
+        shell: pwsh
+        run: |
+          choco install innosetup --version=6.7.3 --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup install failed' }
+          ./scripts/build-installer.ps1 -SkipBuild
+      - name: Smoke test installer and uninstaller
+        shell: pwsh
+        run: ./scripts/test-installer.ps1
+      - name: Install LibreOffice and test dependencies
+        shell: pwsh
+        run: |
+          choco install libreoffice-fresh --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'LibreOffice install failed' }
+          python -m pip install "pypdf>=6,<7" "Pillow>=12,<13" "python-docx>=1.1,<2" "openpyxl>=3.1,<4"
+          if ($LASTEXITCODE -ne 0) { throw 'Test dependencies install failed' }
+      - name: Verify mixed files, Word and Excel
+        shell: pwsh
+        run: |
+          $env:QPDF_PATH = "$pwd/tools/qpdf/bin/qpdf.exe"
+          python tests/integration.py build/Release/merger_tests.exe --require-office
+          if ($LASTEXITCODE -ne 0) { throw 'Integration tests failed' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PDF-Merger-windows-x64
+          path: |
+            dist/PDF-Merger-windows-x64.zip
+            dist/PDF-Merger-Setup-windows-x64.exe
+          if-no-files-found: error
