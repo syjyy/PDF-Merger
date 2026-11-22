@@ -11,7 +11,7 @@ using namespace ordered_pdf;
 namespace {
 constexpr UINT ProgressMessage = WM_APP + 1;
 constexpr UINT FinishedMessage = WM_APP + 2;
-enum Control { Add = 100, Up, Down, Remove, Clear, MergeNow, List, Status, RecentLink, SaveAs, DeleteRecent, RecentLabel };
+enum Control { Add = 100, Up, Down, Remove, Clear, MergeNow, List, Status, RecentLink, SaveAs, DeleteRecent, RecentLabel, ScanImages };
 struct Completion { bool success; std::wstring message; };
 struct State {
     HWND window{}, list{}, status{};
@@ -77,6 +77,7 @@ void UpdateButtons() {
     EnableWindow(GetDlgItem(app.window, Down), !app.busy && selected >= 0 && selected + 1 < static_cast<int>(app.files.size()));
     EnableWindow(GetDlgItem(app.window, Remove), !app.busy && selected >= 0);
     SetWindowTextW(GetDlgItem(app.window, MergeNow), app.busy ? L"正在处理…" : L"合并并保留 PDF");
+    EnableWindow(GetDlgItem(app.window, ScanImages), !app.busy);
     UpdateRecentDocument();
 }
 
@@ -166,12 +167,14 @@ void DeleteRecentPdf() {
         ShowError(L"删除失败。请先关闭 PDF 阅读器中的该文件。\nWindows 错误码：" + std::to_wstring(GetLastError()));
         return;
     }
+    EnableWindow(GetDlgItem(app.window, ScanImages), !app.busy);
     UpdateRecentDocument();
 }
 
 void MergePdf() {
     if (app.busy || app.files.empty()) return;
     const auto inputs = app.files;
+    const bool scanImages = SendDlgItemMessageW(app.window, ScanImages, BM_GETCHECK, 0, 0) == BST_CHECKED;
     fs::path output;
     try { output = RecentPdfPath(); }
     catch (const Error& error) { ShowError(error.message); return; }
@@ -180,13 +183,13 @@ void MergePdf() {
     UpdateButtons();
     SetWindowTextW(app.status, L"正在准备文件…");
     try {
-        app.worker = std::thread([inputs, output, window = app.window] {
+        app.worker = std::thread([inputs, output, scanImages, window = app.window] {
             auto done = std::make_unique<Completion>();
             try {
                 Merge(inputs, output, [window](const std::wstring& text) {
                     auto update = std::make_unique<std::wstring>(text);
                     if (PostMessageW(window, ProgressMessage, 0, reinterpret_cast<LPARAM>(update.get()))) update.release();
-                });
+                }, scanImages);
                 done->success = true;
                 done->message = L"合并完成，文档已保留在：\n" + output.wstring() + L"\n\n可从主界面打开、另存或删除。";
             } catch (const Error& error) {
@@ -212,7 +215,8 @@ void Layout() {
         MoveWindow(GetDlgItem(app.window, id), x, Px(18), buttonW, buttonH, TRUE);
         x += buttonW + gap;
     }
-    MoveWindow(app.list, margin, Px(64), width - margin * 2, (std::max)(Px(80), height - Px(217)), TRUE);
+    MoveWindow(GetDlgItem(app.window, ScanImages), margin, Px(59), width - margin * 2, Px(30), TRUE);
+    MoveWindow(app.list, margin, Px(99), width - margin * 2, (std::max)(Px(80), height - Px(252)), TRUE);
     ListView_SetColumnWidth(app.list, 0, Px(55));
     ListView_SetColumnWidth(app.list, 1, Px(240));
     ListView_SetColumnWidth(app.list, 2, (std::max)(Px(180), width - Px(350)));
@@ -242,6 +246,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         control(L"BUTTON", L"下移", WS_TABSTOP | BS_PUSHBUTTON, Down);
         control(L"BUTTON", L"移除", WS_TABSTOP | BS_PUSHBUTTON, Remove);
         control(L"BUTTON", L"清空", WS_TABSTOP | BS_PUSHBUTTON, Clear);
+        control(L"BUTTON", L"图片扫描：自动裁边、拉正、灰度提亮（仅图片）", WS_TABSTOP | BS_AUTOCHECKBOX, ScanImages);
         control(L"BUTTON", L"合并并保留 PDF", WS_TABSTOP | BS_DEFPUSHBUTTON, MergeNow);
         app.list = control(WC_LISTVIEWW, L"", WS_TABSTOP | WS_BORDER | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS, List);
         ListView_SetExtendedListViewStyle(app.list, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP);

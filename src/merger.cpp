@@ -1,4 +1,5 @@
 #include "merger.h"
+#include "scanner.h"
 
 #include <gdiplus.h>
 #include <objbase.h>
@@ -277,7 +278,7 @@ ProcessResult RunProcess(const fs::path& exe, const std::vector<std::wstring>& a
     return {code, ReadBytes(log)};
 }
 
-void ImageToPdf(const fs::path& input, const fs::path& output) {
+void ImageToPdf(const fs::path& input, const fs::path& output, bool scanImages) {
     TemporaryDirectory temporary;
     std::unique_ptr<Gdiplus::Bitmap> original(Gdiplus::Bitmap::FromFile(input.c_str()));
     if (!original || original->GetLastStatus() != Gdiplus::Ok) throw Error(L"图片无法读取或格式不匹配。");
@@ -326,6 +327,7 @@ void ImageToPdf(const fs::path& input, const fs::path& output) {
                 if (orientation <= 8 && frame->RotateFlip(rotations[orientation]) != Gdiplus::Ok) throw Error(L"图片方向转换失败。");
             }
         }
+        if (scanImages) frame = ScanDocument(*frame);
         w = frame->GetWidth(); h = frame->GetHeight();
         const double ratio = (std::min)(1.0, 3508.0 / (std::max)(w, h));
         UINT targetW = (std::max)(1u, static_cast<UINT>(w * ratio));
@@ -348,7 +350,7 @@ void ImageToPdf(const fs::path& input, const fs::path& output) {
     WriteImagePdf(pages, output);
 }
 
-void Merge(const std::vector<fs::path>& inputs, const fs::path& output, const Progress& progress) {
+void Merge(const std::vector<fs::path>& inputs, const fs::path& output, const Progress& progress, bool scanImages) {
     if (inputs.empty() || inputs.size() > 100) throw Error(L"请选择 1 至 100 个文件。");
     uint64_t total = 0;
     bool needsOffice = false;
@@ -381,7 +383,8 @@ void Merge(const std::vector<fs::path>& inputs, const fs::path& output, const Pr
                 pdfs.push_back(OfficeToPdf(sources[i], temporary.path / (L"office-" + std::to_wstring(i)), office));
             } else {
                 auto pdf = temporary.path / (L"image-" + std::to_wstring(i) + L".pdf");
-                ImageToPdf(sources[i], pdf);
+                if (scanImages && progress) progress(L"正在扫描纸张、校正透视：" + inputs[i].filename().wstring());
+                ImageToPdf(sources[i], pdf, scanImages);
                 pdfs.push_back(pdf);
             }
         } catch (const Error& error) {

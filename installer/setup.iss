@@ -1,6 +1,6 @@
 ; Compile after scripts/build.ps1. The application remains entirely C++.
 #ifndef AppVersion
-  #define AppVersion "1.2.0"
+  #define AppVersion "1.3.0"
 #endif
 #ifndef PayloadDir
   #define PayloadDir "..\dist\OrderedPdfMerger"

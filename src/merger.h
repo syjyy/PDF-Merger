@@ -34,7 +34,7 @@ fs::path FindQpdf();
 fs::path FindLibreOffice();
 ProcessResult RunProcess(const fs::path& exe, const std::vector<std::wstring>& args,
                          const fs::path& workdir, DWORD timeoutMs = 120000);
-void ImageToPdf(const fs::path& input, const fs::path& output);
+void ImageToPdf(const fs::path& input, const fs::path& output, bool scanImages = false);
 void Merge(const std::vector<fs::path>& inputs, const fs::path& output,
-           const Progress& progress = {});
+           const Progress& progress = {}, bool scanImages = false);
 } // namespace ordered_pdf

@@ -1,4 +1,5 @@
 #include "merger.h"
+#include "scanner.h"
 #include <gdiplus.h>
 #include <fstream>
 #include <iomanip>
@@ -42,7 +43,69 @@ template<class Action> void ExpectError(Action action) {
     Require(failed, "expected operation to reject input");
 }
 
+void TestScanner(const fs::path& root) {
+    const CLSID png = {0x557cf406, 0x1a04, 0x11d3, {0x9a, 0x73, 0x00, 0x00, 0xf8, 0x1e, 0xf3, 0x2e}};
+    Gdiplus::Bitmap photo(800, 700, PixelFormat24bppRGB);
+    {
+        Gdiplus::Graphics graphics(&photo);
+        graphics.Clear(Gdiplus::Color(40, 50, 60));
+        Gdiplus::SolidBrush paper(Gdiplus::Color(235, 235, 235));
+        Gdiplus::Point points[] = {{180,70},{650,140},{580,630},{100,530}};
+        graphics.FillPolygon(&paper,points,4);
+        Gdiplus::SolidBrush ink(Gdiplus::Color(25,25,25));
+        Gdiplus::Point line[] = {{210,180},{560,235},{556,255},{206,200}};
+        graphics.FillPolygon(&ink,line,4);
+        // Bright clutter outside the document must not become part of the crop.
+        graphics.FillEllipse(&paper,700,40,65,85);
+    }
+    auto result=ScanDocument(photo);
+    Require(result->GetWidth()>450 && result->GetWidth()<520, "scan width is not paper width");
+    Require(result->GetHeight()>470 && result->GetHeight()<530, "scan height is not paper height");
+    int dark=0;
+    for(UINT y=3;y<result->GetHeight()-3;y+=10) for(UINT x=3;x<result->GetWidth()-3;x+=10) {
+        Gdiplus::Color pixel;
+        Require(result->GetPixel(x,y,&pixel)==Gdiplus::Ok,"scan pixel read failed");
+        Require(pixel.GetR()==pixel.GetG() && pixel.GetG()==pixel.GetB(),"scan is not grayscale");
+        if(pixel.GetR()<100) ++dark;
+    }
+    Require(dark>20 && dark<150,"scan lost text or retained desk background");
+    // A horizontal line on the paper must become approximately horizontal.
+    std::vector<double> centers;
+    for(int x : {90,200,310}) {
+        int sum=0,count=0;
+        for(UINT y=40;y<result->GetHeight()/2;++y) {
+            Gdiplus::Color pixel; result->GetPixel(x,y,&pixel);
+            if(pixel.GetR()<100){sum+=y;++count;}
+        }
+        Require(count>=10,"rectification lost test line");
+        centers.push_back(static_cast<double>(sum)/count);
+    }
+    Require(std::abs(centers.front()-centers.back())<8,"perspective correction did not straighten text");
+    const auto input=root/L"扫描 原图.png", output=root/L"扫描.pdf";
+    Require(photo.Save(input.c_str(),&png,nullptr)==Gdiplus::Ok,"scan fixture save failed");
+    const auto originalBytes=Read(input);
+    Merge({input,input},output,{},true);
+    Require(Read(input)==originalBytes,"scan modified original photo");
+    auto count=RunProcess(FindQpdf(),{L"--show-npages",output.wstring()},root);
+    Require(count.exitCode==0 && count.output.find("2")!=std::string::npos,"scan merge page count mismatch");
+    Require(RunProcess(FindQpdf(),{L"--check",output.wstring()},root).exitCode==0,"scan PDF invalid");
+    const auto before=Read(output);
+    Gdiplus::Bitmap blank(300,300,PixelFormat24bppRGB);
+    {Gdiplus::Graphics g(&blank);g.Clear(Gdiplus::Color::White);}
+    ExpectError([&]{ScanDocument(blank);});
+    const auto bad=root/L"无纸张.png";
+    Require(blank.Save(bad.c_str(),&png,nullptr)==Gdiplus::Ok,"blank save failed");
+    ExpectError([&]{Merge({input,bad},output,{},true);});
+    Require(Read(output)==before,"scan failure overwrote previous PDF");
+    {Gdiplus::Graphics g(&blank);g.Clear(Gdiplus::Color::Black);Gdiplus::SolidBrush b(Gdiplus::Color::White);g.FillEllipse(&b,25,25,250,250);}
+    ExpectError([&]{ScanDocument(blank);});
+    Gdiplus::Bitmap tiny(10,10,PixelFormat24bppRGB);
+    ExpectError([&]{ScanDocument(tiny);});
+    std::cout << "PASS: scanner crop, perspective correction, text preservation, grayscale, clutter rejection, scan PDF, original/previous output preservation.\n";
+}
+
 void RunTests(const fs::path& root) {
+    TestScanner(root);
     const auto qpdf = FindQpdf();
     const auto settings = ExecutableDirectory() / L"settings.ini";
     if (!fs::exists(settings) && GetEnvironmentVariableW(L"LIBREOFFICE_PATH", nullptr, 0) == 0) {
@@ -106,7 +169,13 @@ int wmain(int argc, wchar_t** argv) {
     if (Gdiplus::GdiplusStartup(&token, &startup, nullptr) != Gdiplus::Ok) return 1;
     int code = 0;
     try {
-        if (argc >= 4 && std::wstring(argv[1]) == L"--merge") {
+        if (argc == 4 && std::wstring(argv[1]) == L"--scan-image") {
+            std::unique_ptr<Gdiplus::Bitmap> input(Gdiplus::Bitmap::FromFile(argv[2]));
+            if (!input || input->GetLastStatus()!=Gdiplus::Ok) throw Error(L"无法打开测试图片。");
+            auto output=ScanDocument(*input);
+            const CLSID png = {0x557cf406,0x1a04,0x11d3,{0x9a,0x73,0x00,0x00,0xf8,0x1e,0xf3,0x2e}};
+            Require(output->Save(argv[3],&png,nullptr)==Gdiplus::Ok,"scan output save failed");
+        } else if (argc >= 4 && std::wstring(argv[1]) == L"--merge") {
             std::vector<fs::path> inputs;
             for (int i = 3; i < argc; ++i) inputs.emplace_back(fs::absolute(argv[i]));
             Merge(inputs, fs::absolute(argv[2]));
